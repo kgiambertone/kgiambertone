@@ -1,0 +1,142 @@
+---
+title: "tximport_EdgeR_Script"
+output: html_notebook
+---
+
+```{r}
+library(edgeR)
+library(tximport)
+library(statmod)
+```
+
+```{r}
+GeneTransMap = read.csv("GeneTransMap.csv")[,2:3]
+GeneTransMap
+```
+
+```{r}
+# Function to load data based on TEMP
+load_samples = function(temp, file_suffix = "") {
+  # Construct file name
+  file_name = paste0("SampleNamesAndTreatments", file_suffix, temp, ".csv")
+  # Load samples
+  samples = read.csv(file_name)
+  # Construct file paths
+  files = file.path(samples$SampleName, "quant.sf")
+  names(files) = samples$SampleName
+  # Validate file paths
+  cat("Files exist check:", all(file.exists(files)), "\n")
+  return(list(samples = samples, files = files))
+}
+
+# Specify TEMP and optional file_suffix for loading different datasets
+TEMP = "_Heat" # Change this to "_Heat", "_Cold", or "" for different datasets
+file_suffix = "_ConSamplesRemoved" # Change this to "_ConSamplesRemoved" if needed
+
+# Load data
+data = load_samples(TEMP, file_suffix)
+
+# Access samples and files
+samples = data$samples
+files = data$files
+```
+
+```{r}
+txi = tximport(files, type="salmon", tx2gene = GeneTransMap, ignoreTxVersion = TRUE, countsFromAbundance = "no")
+```
+
+```{r}
+samples$Treatment = factor(samples$Treatment, levels = unique(samples$Treatment))
+samples
+rownames(samples) = samples$SampleName
+#samples = samples[,2:3,drop=FALSE]
+samples = samples[,2,drop=FALSE]
+samples
+```
+
+```{r}
+txi = txi[2:3]
+write.csv(txi, paste0("T_rexport", TEMP, ".csv"))
+```
+
+```{r}
+treatment = factor(samples$Treatment)
+pamplemoose = factor(samples$Pamplemoose)
+y = DGEList(counts = txi$counts, group = treatment)
+keep = filterByExpr(y, group = treatment)
+y = y[keep,]
+```
+
+```{r}
+# Dynamically adjust the design matrix based on TEMP
+if (TEMP == "_Pairs") {
+  design = model.matrix(~0 + treatment + pamplemoose, data = y$samples)
+  colnames(design)[1:4] = levels(y$samples$group) # Modify column names for paired data
+} else {
+  design = model.matrix(~0 + treatment, data = y$samples)
+  colnames(design) = levels(y$samples$group)
+}
+
+design
+```
+
+```{r}
+y = estimateDisp(y, design, robust = TRUE)
+plotBCV(y)
+```
+
+```{r}
+if (TEMP == "_Heat") {
+  comparisons = makeContrasts(HeatTreatmentvsHeatControl = Heat - Heat_Control, levels = design)
+} else if (TEMP == "_Cold") {
+  comparisons = makeContrasts(ColdTreatmentvsColdControl = Cold - Cold_Control, levels = design)
+} else if (TEMP == "") {
+  comparisons = makeContrasts(ColdControlvsHeatControl = Cold_Control - Heat_Control, levels = design)
+} else {
+  stop("Invalid TEMP value. Please set TEMP to '_Heat', '_Cold', or ''.")
+}
+
+# Print comparisons to confirm the correct one is created
+print(comparisons)
+```
+
+
+```{r}
+#Only use this code if you are running DGE on Heat Treatment vs Cold Treatment
+#fit = glmFit(y, design, robust = TRUE)
+#LOTR = glmLRT(fit, contrast = comparisons[,"HeatTreatmentvsColdTreatment"])
+#topTags(LOTR, n = NULL)$table
+```
+
+```{r}
+fit = glmFit(y, design, robust = TRUE)
+
+if (TEMP == "") {
+  # Run analysis for ColdControl vs HeatControl
+  LOTR = glmLRT(fit, contrast = comparisons[,"ColdControlvsHeatControl"])
+} else if (TEMP == "_Heat") {
+  # Run analysis for HeatTreatment vs HeatControl
+  LOTR = glmLRT(fit, contrast = comparisons[,"HeatTreatmentvsHeatControl"])
+} else if (TEMP == "_Cold") {
+  # Run analysis for ColdTreatment vs ColdControl
+  LOTR = glmLRT(fit, contrast = comparisons[,"ColdTreatmentvsColdControl"])
+} else {
+  stop("Invalid TEMP value. Please set TEMP to '_Heat', '_Cold', or ''.")
+}
+
+# Display the top tags
+topTags(LOTR, n = NULL)$table
+```
+
+```{r}
+if (TEMP == "") {
+  colors = c(Cold="blue", Cold_Control="lightblue", Heat="red", Heat_Control="pink")
+  plotMDS(y, col = colors[treatment], labels = colnames(y))
+} else if (TEMP == "_Heat") {
+  colors = c(Heat="red", Heat_Control="pink")
+  plotMDS(y, col = colors[treatment], labels = colnames(y))
+} else if (TEMP == "_Cold") {
+  colors = c(Cold="blue", Cold_Control="lightblue")
+  plotMDS(y, col = colors[treatment], labels = colnames(y))
+}
+```
