@@ -1,116 +1,148 @@
 ---
-title: "tximport_EdgeR_Script"
-output: html_notebook
+title: "Tximport_EdgeR_Script_WithComments"
+output: html_document
+date: "2025-01-09"
 ---
 
 ```{r}
-library(edgeR)
-library(tximport)
-library(statmod)
+# Load necessary libraries
+library(edgeR)      # For differential gene expression analysis
+library(tximport)  # For importing transcript-level quantification data
+library(statmod)   # For statistical modeling
+
 ```
 
 ```{r}
-GeneTransMap = read.csv("GeneTransMap.csv")[,2:3]
-GeneTransMap
+# Load Gene to Transcript Mapping file
+GeneTransMap = read.csv("GeneTransMap.csv")[,2:3]  # Read the second and third columns from CSV file
+GeneTransMap  # Display the mapping to confirm it's loaded correctly
+
 ```
 
 ```{r}
-# Function to load data based on TEMP
+# Function to load sample data based on TEMP and file suffix
 load_samples = function(temp, file_suffix = "") {
-  # Construct file name
+  # Construct file name using TEMP and file_suffix
   file_name = paste0("SampleNamesAndTreatments", file_suffix, temp, ".csv")
-  # Load samples
+  # Load the sample data from the CSV
   samples = read.csv(file_name)
-  # Construct file paths
+  # Construct paths to the quantification files
   files = file.path(samples$SampleName, "quant.sf")
-  names(files) = samples$SampleName
-  # Validate file paths
+  names(files) = samples$SampleName  # Assign sample names as file names
+  # Check if all files exist
   cat("Files exist check:", all(file.exists(files)), "\n")
-  return(list(samples = samples, files = files))
+  return(list(samples = samples, files = files))  # Return the sample and file data
 }
 
-# Specify TEMP and optional file_suffix for loading different datasets
-TEMP = "_Heat" # Change this to "_Heat", "_Cold", or "" for different datasets
-file_suffix = "_ConSamplesRemoved" # Change this to "_ConSamplesRemoved" if needed
+# Specify TEMP and file_suffix for dataset loading (adjust as necessary)
+TEMP = "_Cold"  # Set TEMP to "_Heat", "_Cold", "_Pairs", or "" for different datasets
+file_suffix = ""  # Optional file suffix for specific dataset version (e.g., "_ConSamplesRemoved")
 
-# Load data
+# Load data based on specified TEMP and file_suffix
 data = load_samples(TEMP, file_suffix)
 
-# Access samples and files
+# Extract samples and file paths from the loaded data
 samples = data$samples
 files = data$files
+
 ```
 
 ```{r}
+# Import the transcript-level quantification data using tximport
 txi = tximport(files, type="salmon", tx2gene = GeneTransMap, ignoreTxVersion = TRUE, countsFromAbundance = "no")
+
 ```
 
 ```{r}
-samples$Treatment = factor(samples$Treatment, levels = unique(samples$Treatment))
-samples
-rownames(samples) = samples$SampleName
-#samples = samples[,2:3,drop=FALSE]
-samples = samples[,2,drop=FALSE]
-samples
-```
+# Process sample information: convert treatment to a factor and update rownames
+samples$Treatment = factor(samples$Treatment, levels = unique(samples$Treatment))  # Factor for treatment groups
+samples  # Display the samples data
+rownames(samples) = samples$SampleName  # Set row names as sample names
 
-```{r}
-txi = txi[2:3]
-write.csv(txi, paste0("T_rexport", TEMP, ".csv"))
-```
-
-```{r}
-treatment = factor(samples$Treatment)
-pamplemoose = factor(samples$Pamplemoose)
-y = DGEList(counts = txi$counts, group = treatment)
-keep = filterByExpr(y, group = treatment)
-y = y[keep,]
-```
-
-```{r}
-# Dynamically adjust the design matrix based on TEMP
+# Handle _Pairs case: reduce columns if pairing is used, else retain only the treatment column
 if (TEMP == "_Pairs") {
+    samples = samples[,2:3,drop=FALSE]  # Retain columns 2 and 3 for paired data
+} else {
+  samples = samples[,2,drop=FALSE]  # Retain only the treatment column for other cases
+}
+samples  # Display updated sample data
+
+```
+
+```{r}
+# Subset txi data for specific analysis and export
+txi = txi[2:3]  # Retain the necessary data columns (adjust as needed)
+write.csv(txi, paste0("T_rexport", TEMP, ".csv"))  # Export the txi data to CSV file
+
+```
+
+```{r}
+# Set up the DGE analysis: create a DGEList object
+treatment = factor(samples$Treatment)  # Define treatment as a factor
+pamplemoose = factor(samples$Pamplemoose)  # Define Pamplemoose variable as a factor
+
+# Create a DGEList object for analysis
+y = DGEList(counts = txi$counts, group = treatment)
+
+# Filter out low-expressed genes
+keep = filterByExpr(y, group = treatment)
+y = y[keep,]  # Retain only the genes with sufficient expression
+
+```
+
+```{r}
+# Adjust the design matrix based on TEMP and whether data is paired
+if (TEMP == "_Pairs") {
+  # Create a design matrix for paired data including treatment and Pamplemoose factor
   design = model.matrix(~0 + treatment + pamplemoose, data = y$samples)
-  colnames(design)[1:4] = levels(y$samples$group) # Modify column names for paired data
+  colnames(design)[1:4] = levels(y$samples$group)  # Modify column names for paired data
 } else {
+  # Design matrix for unpaired data with only treatment factor
   design = model.matrix(~0 + treatment, data = y$samples)
-  colnames(design) = levels(y$samples$group)
+  colnames(design) = levels(y$samples$group)  # Update column names with treatment groups
 }
 
-design
+design  # Display the design matrix
+
 ```
 
 ```{r}
-y = estimateDisp(y, design, robust = TRUE)
-plotBCV(y)
+# Estimate the dispersion of the data and plot BCV (biological coefficient of variation)
+y = estimateDisp(y, design, robust = TRUE)  # Estimate dispersion with robust method
+plotBCV(y)  # Plot BCV to visualize variability
+
 ```
 
 ```{r}
+# Create contrasts based on TEMP for different comparisons
 if (TEMP == "_Heat") {
-  comparisons = makeContrasts(HeatTreatmentvsHeatControl = Heat - Heat_Control, levels = design)
+  comparisons = makeContrasts(HeatTreatmentvsHeatControl = Heat - Heat_Control, levels = design)  # Heat vs Heat Control
 } else if (TEMP == "_Cold") {
-  comparisons = makeContrasts(ColdTreatmentvsColdControl = Cold - Cold_Control, levels = design)
+  comparisons = makeContrasts(ColdTreatmentvsColdControl = Cold - Cold_Control, levels = design)  # Cold vs Cold Control
 } else if (TEMP == "") {
-  comparisons = makeContrasts(ColdControlvsHeatControl = Cold_Control - Heat_Control, levels = design)
+  comparisons = makeContrasts(ColdControlvsHeatControl = Cold_Control - Heat_Control, levels = design)  # Cold Control vs Heat Control
 } else {
-  stop("Invalid TEMP value. Please set TEMP to '_Heat', '_Cold', or ''.")
+  stop("Invalid TEMP value. Please set TEMP to '_Heat', '_Cold', or ''.")  # Handle invalid TEMP
 }
 
-# Print comparisons to confirm the correct one is created
+# Print the contrast to check the correct one is created
 print(comparisons)
+
 ```
 
-
 ```{r}
-#Only use this code if you are running DGE on Heat Treatment vs Cold Treatment
+# This chunk is commented out: for running DGE on Heat Treatment vs Cold Treatment
 #fit = glmFit(y, design, robust = TRUE)
 #LOTR = glmLRT(fit, contrast = comparisons[,"HeatTreatmentvsColdTreatment"])
 #topTags(LOTR, n = NULL)$table
+
 ```
 
 ```{r}
-fit = glmFit(y, design, robust = TRUE)
+# Fit the model and run the contrast analysis based on TEMP
+fit = glmFit(y, design, robust = TRUE)  # Fit the GLM with robust dispersion
 
+# Run the appropriate analysis based on TEMP
 if (TEMP == "") {
   # Run analysis for ColdControl vs HeatControl
   LOTR = glmLRT(fit, contrast = comparisons[,"ColdControlvsHeatControl"])
@@ -121,22 +153,26 @@ if (TEMP == "") {
   # Run analysis for ColdTreatment vs ColdControl
   LOTR = glmLRT(fit, contrast = comparisons[,"ColdTreatmentvsColdControl"])
 } else {
-  stop("Invalid TEMP value. Please set TEMP to '_Heat', '_Cold', or ''.")
+  stop("Invalid TEMP value. Please set TEMP to '_Heat', '_Cold', or ''.")  # Handle invalid TEMP
 }
 
-# Display the top tags
+# Display the top tags from the analysis results
 topTags(LOTR, n = NULL)$table
+
 ```
 
 ```{r}
+# Plot MDS based on TEMP and the corresponding color scheme
 if (TEMP == "") {
   colors = c(Cold="blue", Cold_Control="lightblue", Heat="red", Heat_Control="pink")
-  plotMDS(y, col = colors[treatment], labels = colnames(y))
+  plotMDS(y, col = colors[treatment], labels = colnames(y))  # Plot MDS for all treatments
 } else if (TEMP == "_Heat") {
   colors = c(Heat="red", Heat_Control="pink")
-  plotMDS(y, col = colors[treatment], labels = colnames(y))
+  plotMDS(y, col = colors[treatment], labels = colnames(y))  # Plot MDS for Heat and Heat_Control only
 } else if (TEMP == "_Cold") {
   colors = c(Cold="blue", Cold_Control="lightblue")
-  plotMDS(y, col = colors[treatment], labels = colnames(y))
+  plotMDS(y, col = colors[treatment], labels = colnames(y))  # Plot MDS for Cold and Cold_Control only
 }
+
 ```
+
